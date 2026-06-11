@@ -1,0 +1,16 @@
+.coverage
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.venv/
+venv/
+ENV/
+env.bak/
+venv.bak/
+/archives_*/
+archives/
+config.json
+archives_'*'/
