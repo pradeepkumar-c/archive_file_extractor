@@ -8,26 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# jobid generation
-# ---------------------------------------------------------------------------
-
-class TestJobIdGeneration:
-
-    def test_jobid_fits_biginteger(self):
-        """uuid jobid must fit in a signed 64-bit PostgreSQL BigInteger."""
-        jobid = uuid.uuid4().int & 0x7FFFFFFFFFFFFFFF
-        assert 0 <= jobid <= 0x7FFFFFFFFFFFFFFF
-
-    def test_jobid_is_unique(self):
-        ids = {uuid.uuid4().int & 0x7FFFFFFFFFFFFFFF for _ in range(1000)}
-        assert len(ids) == 1000
-
-
-# ---------------------------------------------------------------------------
-# find_matching_files
-# ---------------------------------------------------------------------------
-
 class TestFindMatchingFiles:
 
     def test_finds_json_files(self, tmp_path):

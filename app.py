@@ -21,7 +21,8 @@ def init_db():
 def shutdown_session(exception=None):
     db.session.remove()
 
-if __name__ == '__main__':
+
+def start_app():
     print("Starting Flask app and job dispatcher...")
 
     init_db()
@@ -29,4 +30,8 @@ if __name__ == '__main__':
     dispatcher = Thread(target=job_dispatcher, args=(app,), daemon=True)
     dispatcher.start()
 
-    app.run(host='0.0.0.0', port=8090)
+    app.run(host='0.0.0.0', port=8080)
+
+
+if __name__ == '__main__':
+    start_app()

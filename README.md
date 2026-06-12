@@ -63,19 +63,19 @@ curl.exe -i -X POST http://localhost:8080/extractions \
 **Response:**
 ```
 HTTP/1.1 202 ACCEPTED
-{"job_id": 4048386263501496562}
+{"job_id": "14316009-3d9d-4d62-8cd6-11e74f8022a0"}
 ```
 
 ### Check job status
 ```sh
-curl.exe -i -X GET http://localhost:8080/extractions/4048386263501496562
+curl.exe -i -X GET http://localhost:8080/extractions/14316009-3d9d-4d62-8cd6-11e74f8022a0
 ```
 **Response:**
 ```json
 {
-  "jobid": "4048386263501496562",
+  "jobid": "d99a5b73-02b0-4f30-b58c-7e0eaeb30a31",
   "status": "completed",
-  "num_matches": 5,
+  "num_matches": 2,
   "submitted_at": "2026-05-15T06:57:34.509447",
   "completed_at": "2026-05-15T06:57:34.868648"
 }
@@ -83,19 +83,19 @@ curl.exe -i -X GET http://localhost:8080/extractions/4048386263501496562
 
 ### Get matched files (paginated)
 ```sh
-curl.exe -i -X GET "http://localhost:8080/extractions/4048386263501496562/results?page=1&per_page=10"
+curl.exe -i -X GET "http://localhost:8080/extractions/d99a5b73-02b0-4f30-b58c-7e0eaeb30a31/results?page=1&per_page=10"
 ```
 **Response:**
 ```json
 {
-  "jobid": "4048386263501496562",
+  "jobid": "d99a5b73-02b0-4f30-b58c-7e0eaeb30a31",
   "files": [
     "BMW_ICON_25.zip/BMW_ICON_25/Cybellum_SBOM-CycloneDX-1.6-...-en.json",
     "BMW_ICON_25.zip/BMW_ICON_25/Cybellum_SBOM-undefined-...-en.json"
   ],
   "page": 1,
   "per_page": 10,
-  "total": 5,
+  "total": 2,
   "pages": 1
 }
 ```
@@ -113,7 +113,7 @@ curl.exe -i -X GET http://localhost:8080/health
 ```sql
 -- Connect: docker compose exec db psql -U myuser -d mydb
 SELECT jobid, status, submitted_at, completed_at FROM jobs_storage;
-SELECT filename, filepath, nesting_depth, source_archive FROM file_matches WHERE jobid = 4048386263501496562;
+SELECT filename, filepath, nesting_depth, source_archive FROM file_matches WHERE jobid = d99a5b73-02b0-4f30-b58c-7e0eaeb30a31;
 ```
 
 ## Testing
@@ -131,7 +131,13 @@ venv\Scripts\python.exe -m pytest tests/test_integration.py -v
 ## Known Limitations & Design Notes
 
 - **Supported archive types:** Only `.zip` and `.7z` are supported. To add more formats, extend the `extract_archive` function in `app.py`.
-- **Concurrency:** The job dispatcher uses `multiprocessing.Pool` with a configurable `POOL_SIZE` (default: 4). Set via the `POOL_SIZE` environment variable in `docker-compose.yml`.
-- **Why processes, not threads?**
-  Archive extraction and file I/O are CPU- and disk-bound operations. Python's Global Interpreter Lock (GIL) prevents true parallelism with threads for CPU-bound work. Separate processes bypass the GIL and can run on multiple CPU cores, giving real parallel throughput for simultaneous extraction jobs.
+- **Concurrency:** The job dispatcher uses a background thread (or thread pool) to process extraction jobs asynchronously. This allows the application to handle multiple requests while processing jobs in the background without blocking the main Flask server.
+  - **Why threads?**
+    - The workload in this project is primarily **I/O-bound**, involving archive extraction, file system traversal (glob pattern matching), and database operations. For such tasks, multithreading is efficient because threads can continue execution while waiting for I/O operations to complete.
+    - Threads are also lightweight and share the same memory space, making them easier to integrate with Flask’s application context and database connections. In contrast, multiprocessing introduces additional overhead due to separate memory spaces and inter-process communication, and requires more complex setup for managing application context and database sessions.
+    - Since the project does not involve CPU-intensive computations, the limitations of Python’s Global Interpreter Lock (GIL) are not a bottleneck in this case. Therefore, multithreading provides a simpler and efficient concurrency model for the current use case.
 
+- **Input Format:** The API accepts the archive as `multipart/form-data`.
+    - `multipart/form-data` was selected because it is a standard and widely supported method for file uploads in REST APIs. It allows clients to directly send archive files (e.g., `.zip`, `.7z`) along with additional parameters such as the glob pattern in a single request.
+
+    - This approach simplifies implementation and testing, as it can be easily validated using tools like `curl` or Postman without requiring external file hosting or URL management. It also ensures better control over input validation, file handling, and security within the application.
