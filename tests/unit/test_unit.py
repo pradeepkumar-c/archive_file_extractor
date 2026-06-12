@@ -244,7 +244,7 @@ class TestPostExtractionsEndpoint:
 
     def test_valid_submission_returns_202(self, client):
         with patch("app.store_job_in_db", return_value=True), \
-             patch("app.shutil.copy2"), patch("app.os.makedirs"):
+            patch("app.shutil.copy2"), patch("app.os.makedirs"):
             resp = client.post(
                 "/extractions",
                 data={"archive": (self._zip_bytes(), "test.zip"), "pattern": "**/*.json"},
@@ -255,7 +255,7 @@ class TestPostExtractionsEndpoint:
 
     def test_db_failure_returns_500(self, client):
         with patch("app.store_job_in_db", return_value=False), \
-             patch("app.shutil.copy2"), patch("app.os.makedirs"):
+            patch("app.shutil.copy2"), patch("app.os.makedirs"):
             resp = client.post(
                 "/extractions",
                 data={"archive": (self._zip_bytes(), "test.zip"), "pattern": "**/*.json"},
