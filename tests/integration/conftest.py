@@ -1,35 +1,44 @@
-collect_ignore = ["test_app.py"]
+import pytest
+from testcontainers.postgres import PostgresContainer
+from flask import Flask
+from extensions import db
+from routes import bp
+from threading import Thread
+from service import job_dispatcher
 
-import json
-import os
-import sys
-from unittest.mock import patch, mock_open
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+@pytest.fixture(scope="session")
+def postgres_container():
+    with PostgresContainer("postgres:15") as postgres:
+        yield postgres
 
-os.chdir(PROJECT_ROOT)
 
-# ---------------------------------------------------------------------------
-# Fake config
-# ---------------------------------------------------------------------------
-FAKE_CONFIG = {
-    "DB_HOST": "localhost",
-    "DB_PORT": 5432,
-    "DB_NAME": "test_db",
-    "DB_USER": "test_user",
-    "DB_PASSWORD": "test_pass",
-    "DB_TABLE_JOBS": "jobs_storage",
-    "DB_TABLE_FILE_MATCHES": "file_matches",
-}
+@pytest.fixture(scope="session")
+def test_app(postgres_container):
+    # Build a fresh Flask app for tests so we can initialize DB with testcontainer URI
+    app = Flask(__name__)
+    app.config["SQLALCHEMY_DATABASE_URI"] = postgres_container.get_connection_url()
+    app.config["TESTING"] = True
 
-_real_open = open
+    # Register routes blueprint
+    app.register_blueprint(bp)
 
-def _patched_open(file, *args, **kwargs):
-    if str(file) == "config.json":
-        return mock_open(read_data=json.dumps(FAKE_CONFIG))()
-    return _real_open(file, *args, **kwargs)
+    # Initialize DB with this app and create tables
+    db.init_app(app)
 
-with patch("builtins.open", side_effect=_patched_open):
-    import app
+    with app.app_context():
+        db.create_all()
+
+        # start job dispatcher in background for integration tests
+        dispatcher = Thread(target=job_dispatcher, args=(app,), daemon=True)
+        dispatcher.start()
+
+        yield app
+
+        db.session.remove()
+        db.drop_all()
+
+
+@pytest.fixture
+def client(test_app):
+    return test_app.test_client()

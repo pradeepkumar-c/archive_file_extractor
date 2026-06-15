@@ -351,11 +351,12 @@ def job_dispatcher(app):
                 pending_jobs = JobStorage.query.filter_by(
                     status=STATUS_PENDING
                 ).limit(pool_size).all()
-
+                print(f"Found {len(pending_jobs)} pending jobs: {pending_jobs}")
                 for job in pending_jobs:
                     job.status = STATUS_RUNNING
                     jobids.append(job.jobid)
 
+                print(f"Dispatching jobs: {jobids}")
                 try:
                     db.session.commit()
                 except SQLAlchemyError:
