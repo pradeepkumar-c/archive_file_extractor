@@ -13,8 +13,8 @@ This service processes archive extraction jobs asynchronously. It accepts an arc
 ```mermaid
 graph TD
     A[Client] --> B[Flask API]
-    B --> C[Database (JobStorage & FileMatch)]
-    C --> D[Job Dispatcher (Polling Loop)]
+    B --> C[Database - JobStorage and FileMatch]
+    C --> D[Job Dispatcher - Polling Loop]
     D --> E[ThreadPoolExecutor]
     E --> F[process_job Worker]
     F --> G[Recursive Extraction]
