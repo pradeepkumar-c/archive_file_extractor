@@ -16,3 +16,4 @@ config.json
 archives_'*'/
 docs/REVIEW.md
 docs/REVIEW_v2.md
+testdata/multitar.tar.tar

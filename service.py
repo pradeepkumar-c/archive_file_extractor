@@ -22,19 +22,14 @@ STATUS_FAILED = 'failed'
 MAX_NESTING_DEPTH = 10
 
 def extractions(archive, pattern):
-    temp_dir = None
+
     try:
-        temp_dir = tempfile.mkdtemp()
-
-        archive_path = os.path.join(temp_dir, archive.filename)
-        archive.save(archive_path)
-
         jobid = uuid.uuid4()
         archive_dir =  f"archives_{jobid}"
         os.makedirs(archive_dir, exist_ok=True)
 
         archive_dest = os.path.join(archive_dir, archive.filename)
-        shutil.copy2(archive_path, archive_dest)
+        archive.save(archive_dest)
 
         if not pattern.startswith("**/"):
             pattern = f"**/{pattern}"
@@ -51,9 +46,6 @@ def extractions(archive, pattern):
     except Exception as e:
         raise RuntimeError("Unexpected error during extraction") from e
 
-    finally:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
 
 def store_job_in_db(jobid, archivefile, pattern, status=STATUS_PENDING):
     print("Storing job in database for jobid:", jobid, "archivefile:", archivefile, "pattern:", pattern, "status:", status)
@@ -300,8 +292,6 @@ def process_job(app, jobid):
             job = JobStorage.query.filter_by(jobid=jobid).first()
             if not job:
                 raise NotFoundError("Job not found")
-            job.status = STATUS_RUNNING
-            db.session.commit()
 
             archivefile = job.archivename
             pattern = job.pattern

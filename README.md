@@ -1,143 +1,209 @@
-# Dockerized Flask Archive Extraction API
+# Archive Extractor Service
 
-## Overview
-A Flask-based REST API that accepts uploaded archives (`.zip`, `.7z`), recursively extracts nested archives, matches files by pattern, and stores full metadata in PostgreSQL. Jobs are processed asynchronously by a background process pool.
+---
 
-## Features
-- Submit archive extraction jobs via REST API
-- Supports `.zip` and `.7z` (including deeply nested archives)
-- Pattern-based file matching (e.g., `**/*.json`)
-- Tracks job status (`pending` → `running` → `completed`/`failed`) and full file metadata in PostgreSQL
-- Configurable parallel workers via `POOL_SIZE` environment variable
-- Dockerized: runs with a single `docker compose up`
+## 1. Overview
 
-## Main Files
+This service accepts an archive file and a file pattern, recursively extracts nested archives, finds matching files, and stores results in a database.
 
-| File | Purpose |
-|---|---|
-| `app.py` | Flask app — API endpoints, extraction logic, DB models, job dispatcher |
-| `requirements.txt` | Python dependencies |
-| `Dockerfile` | Container image for the Flask app |
-| `docker-compose.yml` | Multi-container setup (app + PostgreSQL) |
-| `config.json` | Default DB config (overridden by Docker env vars) |
-| `tests/test_unit.py` | Unit tests — no DB required |
-| `tests/test_integration.py` | Integration test — requires running DB |
+The processing is asynchronous and supports concurrent execution.
 
-## API Endpoints
+---
 
-| Method | Endpoint | Description | Request Body | Response |
-|---|---|---|---|---|
-| `POST` | `/extractions` | Submit an archive extraction job | `archive` (file), `pattern` (string) | `{"job_id": <id>}` — 202 |
-| `GET` | `/extractions/<jobid>` | Get job status and match count | — | `{"jobid", "status", "submitted_at", "completed_at", "num_matches"}` |
-| `GET` | `/extractions/<jobid>/results` | Paginated list of matched file paths | `?page=1&per_page=10` | `{"files": [...], "total", "pages"}` |
-| `GET` | `/health` | Health check | — | `{"status": "ok"}` |
+## 2. Features
 
-## Build & Run
+- Recursive extraction of nested archives (.zip, .tar, .tar.gz, .7z)
+- Pattern-based file search (glob)
+- Asynchronous job processing
+- Database persistence of results
+- Pagination support for results
+- Concurrent processing using ThreadPool
 
-### 1. Build and start with Docker Compose
-```sh
-docker compose up --build
-```
-- App API: http://localhost:8080
-- DB: localhost:5432 (user: `myuser`, pass: `mypassword`, db: `mydb`)
+---
 
-### 2. Change worker pool size (optional)
-Edit `POOL_SIZE` in `docker-compose.yml` before starting:
-```yaml
-POOL_SIZE: 8   # run 8 parallel extraction processes
+## 3. Project Structure
+
+| File | Description |
+|------|------------|
+| app.py | Flask entry point |
+| routes.py | API endpoints |
+| service.py | Core logic and job execution |
+| model.py | Database models |
+| tests/ | Unit + integration tests |
+
+---
+
+## 4. Build & Run
+
+### Install dependencies
+```bash
+pip install -r requirements.txt
 ```
 
-### 3. Access the database
-```sh
-docker compose exec db psql -U myuser -d mydb
+### Run service
+```bash
+python app.py
 ```
 
-## Feature Test Examples
+---
 
-### Submit a job
-```sh
-curl.exe -i -X POST http://localhost:8080/extractions \
-  -F "archive=@./BMW_ICON_25.zip" \
+## 5. Docker Run
+
+### Build image
+```bash
+docker build -t archive-extractor .
+```
+
+### Run container
+```bash
+docker run -p 8080:8080 \
+-e DB_HOST=localhost \
+-e DB_PORT=5432 \
+-e DB_NAME=extractor \
+-e DB_USER=user \
+-e DB_PASSWORD=pass \
+archive-extractor
+```
+
+---
+
+## 6. API Endpoints
+
+### 1. Submit Job
+
+```bash
+POST /extractions
+```
+
+Example:
+```bash
+curl -X POST http://localhost:8080/extractions \
+  -F "archive=@file.zip" \
   -F "pattern=**/*.json"
 ```
-**Response:**
-```
-HTTP/1.1 202 ACCEPTED
-{"job_id": "14316009-3d9d-4d62-8cd6-11e74f8022a0"}
+
+Response:
+```json
+{ "job_id": "uuid" }
 ```
 
-### Check job status
-```sh
-curl.exe -i -X GET http://localhost:8080/extractions/14316009-3d9d-4d62-8cd6-11e74f8022a0
+---
+
+### 2. Get Job Status
+
+```bash
+GET /extractions/{job_id}
 ```
-**Response:**
+
+Response:
 ```json
 {
-  "jobid": "d99a5b73-02b0-4f30-b58c-7e0eaeb30a31",
+  "jobid": "...",
   "status": "completed",
-  "num_matches": 2,
-  "submitted_at": "2026-05-15T06:57:34.509447",
-  "completed_at": "2026-05-15T06:57:34.868648"
+  "num_matches": 10
 }
 ```
 
-### Get matched files (paginated)
-```sh
-curl.exe -i -X GET "http://localhost:8080/extractions/d99a5b73-02b0-4f30-b58c-7e0eaeb30a31/results?page=1&per_page=10"
+---
+
+### 3. Get Results
+
+```bash
+GET /extractions/{job_id}/results?page=1&per_page=10
 ```
-**Response:**
+
+Response:
 ```json
 {
-  "jobid": "d99a5b73-02b0-4f30-b58c-7e0eaeb30a31",
-  "files": [
-    "BMW_ICON_25.zip/BMW_ICON_25/Cybellum_SBOM-CycloneDX-1.6-...-en.json",
-    "BMW_ICON_25.zip/BMW_ICON_25/Cybellum_SBOM-undefined-...-en.json"
-  ],
-  "page": 1,
-  "per_page": 10,
-  "total": 2,
-  "pages": 1
+  "files": ["file1.json", "file2.json"]
 }
 ```
 
-### Health check
-```sh
-curl.exe -i -X GET http://localhost:8080/health
-```
-**Response:**
-```json
-{"status": "ok"}
-```
+---
 
-### Verify in DB
-```sql
--- Connect: docker compose exec db psql -U myuser -d mydb
-SELECT jobid, status, submitted_at, completed_at FROM jobs_storage;
-SELECT filename, filepath, nesting_depth, source_archive FROM file_matches WHERE jobid = d99a5b73-02b0-4f30-b58c-7e0eaeb30a31;
+### 4. Health Check
+
+```bash
+GET /health
 ```
 
-## Testing
+---
 
-### Unit tests (no DB required)
-```sh
-venv\Scripts\python.exe -m pytest tests/test_unit.py -v
-```
+## 7. Example Usage
 
-### Integration test (requires DB running via Docker Compose)
-```sh
-venv\Scripts\python.exe -m pytest tests/test_integration.py -v
-```
+1. Submit job
+2. Get job_id
+3. Poll status
+4. Fetch results
 
-## Known Limitations & Design Notes
+---
 
-- **Supported archive types:** Only `.zip` and `.7z` are supported. To add more formats, extend the `extract_archive` function in `app.py`.
-- **Concurrency:** The job dispatcher uses a background thread (or thread pool) to process extraction jobs asynchronously. This allows the application to handle multiple requests while processing jobs in the background without blocking the main Flask server.
-  - **Why threads?**
-    - The workload in this project is primarily **I/O-bound**, involving archive extraction, file system traversal (glob pattern matching), and database operations. For such tasks, multithreading is efficient because threads can continue execution while waiting for I/O operations to complete.
-    - Threads are also lightweight and share the same memory space, making them easier to integrate with Flask’s application context and database connections. In contrast, multiprocessing introduces additional overhead due to separate memory spaces and inter-process communication, and requires more complex setup for managing application context and database sessions.
-    - Since the project does not involve CPU-intensive computations, the limitations of Python’s Global Interpreter Lock (GIL) are not a bottleneck in this case. Therefore, multithreading provides a simpler and efficient concurrency model for the current use case.
+## 8. Database Design
 
-- **Input Format:** The API accepts the archive as `multipart/form-data`.
-    - `multipart/form-data` was selected because it is a standard and widely supported method for file uploads in REST APIs. It allows clients to directly send archive files (e.g., `.zip`, `.7z`) along with additional parameters such as the glob pattern in a single request.
+### Jobs Table
+- jobid
+- status
+- submitted_at
+- completed_at
+- error
 
-    - This approach simplifies implementation and testing, as it can be easily validated using tools like `curl` or Postman without requiring external file hosting or URL management. It also ensures better control over input validation, file handling, and security within the application.
+### FileMatch Table
+- jobid
+- filepath (with nesting chain)
+- filename
+- filesize
+- nesting_depth
+- source_archive
+- extracted_at
+
+---
+
+## 9. Concurrency Design
+
+### ThreadPoolExecutor
+- Handles job execution
+- Supports multiple jobs concurrently
+- Used for I/O operations (file extraction)
+
+### Nested Extraction
+- Recursive processing with safety depth limit
+
+### Why Threading
+- Archive extraction is I/O-bound
+- Efficient for parallel jobs
+
+---
+
+## 10. Assumptions
+
+- Archive may contain nested archives
+- Pattern uses glob format
+- Max nesting depth is limited
+- Database is available and reachable
+
+---
+
+## 11. Error Handling
+
+- Invalid archive → 400
+- Unsupported format → failure
+- DB error → job marked failed
+- Cleanup always happens
+
+---
+
+## 12. Limitations
+
+- No distributed processing
+- No authentication
+- In-memory dispatcher loop
+- Limited scalability
+
+---
+
+## 13. Future Improvements
+
+- Add queue system (Kafka/Redis)
+- Add authentication
+- Add distributed workers
+- Optimize large archive handling

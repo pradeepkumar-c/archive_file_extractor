@@ -1,14 +1,16 @@
 from datetime import datetime
 from sys import path
-
-import pytest
-from unittest.mock import patch, MagicMock
-from service import MAX_NESTING_DEPTH, STATUS_COMPLETED, STATUS_RUNNING,STATUS_PENDING, NotFoundError, ValidationError, extract_and_find, extract_archive, extractions, FileHandlingError, DatabaseError, find_matching_files, getjobresults, job_dispatcher, mark_job_failed, process_extracted_files, process_job, store_files_in_db, store_job_in_db, getjob
-from sqlalchemy.exc import SQLAlchemyError
-from app_factory import create_app
 import zipfile
 import py7zr
 import tarfile
+import pytest
+
+from unittest.mock import patch, MagicMock
+from sqlalchemy.exc import SQLAlchemyError
+
+from app_factory import create_app
+from service import MAX_NESTING_DEPTH, STATUS_COMPLETED, STATUS_RUNNING,STATUS_PENDING, NotFoundError, ValidationError, extract_and_find, extract_archive, extractions, FileHandlingError, DatabaseError, find_matching_files, getjobresults, job_dispatcher, mark_job_failed, process_extracted_files, process_job, store_files_in_db, store_job_in_db, getjob
+
 
 
 @pytest.fixture
@@ -31,25 +33,14 @@ def client(app):
     ("*.json","**/*.json"),
     ("**/*.csv", "**/*.csv")
 ])
-
-@patch('service.shutil.rmtree')
-@patch('service.shutil.copy2')
-@patch('service.os.makedirs')
 @patch('service.store_job_in_db')
 @patch('service.uuid.uuid4')
-@patch('service.tempfile.mkdtemp')
 def test_extractions_success(
-    mock_mkdtemp,
     mock_uuid,
     mock_store,
-    mock_makedirs,
-    mock_copy,
-    mock_rmtree,
     pattern,
     pattern_output
 ):
-
-    mock_mkdtemp.return_value = "/tmp/testdir"
     mock_uuid.return_value = "1234-uuid"
     
     archive = MagicMock()
@@ -59,14 +50,11 @@ def test_extractions_success(
 
     assert result == "1234-uuid"
 
-    archive.save.assert_called_once_with("/tmp/testdir/test.zip")
-    mock_copy.assert_called_once()
+    archive.save.assert_called_once_with("archives_1234-uuid/test.zip")
     mock_store.assert_called_once()
 
     args, kwargs = mock_store.call_args
     assert kwargs["pattern"] == pattern_output
-
-    mock_rmtree.assert_called_once()
 
 
 @ pytest.mark.parametrize("ErrorType, exception_message, ExceptionType, expected_message", [
@@ -74,10 +62,10 @@ def test_extractions_success(
     (SQLAlchemyError, "Bad query", DatabaseError, "Database operation failed"),
     (Exception, "Unexpected error during extraction", RuntimeError, "Unexpected error during extraction"),
 ])
-@ patch('service.tempfile.mkdtemp')
-def test_extractions_oserror(mock_mkdtemp, ErrorType, exception_message, ExceptionType, expected_message):
+@ patch('service.os.makedirs')
+def test_extractions_oserror(mock_makedirs, ErrorType, exception_message, ExceptionType, expected_message):
     archive = MagicMock()
-    mock_mkdtemp.side_effect = ErrorType(exception_message)
+    mock_makedirs.side_effect = ErrorType(exception_message)
     archive.filename = "test.zip"
 
     with pytest.raises(ExceptionType, match=expected_message):
@@ -758,7 +746,7 @@ def test_process_job_ok(app, mock_queries_job):
 
     assert mocks["extract"].call_count == 1
     assert mocks["store"].call_count == 1
-    assert mocks["commit"].call_count == 2
+    assert mocks["commit"].call_count == 1
     assert mocks["rmtree"].call_count == 1
     assert mocks["remove"].call_count == 2
 
@@ -786,7 +774,7 @@ def test_process_job_handled_exceptions(app, mock_queries_job, exception):
     process_job(app, jobid)
 
     assert mocks["store"].call_count == 0
-    assert mocks["commit"].call_count == 1
+    assert mocks["commit"].call_count == 0
     assert mocks["rmtree"].call_count == 1
     assert mocks["remove"].call_count == 2
 

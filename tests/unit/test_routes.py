@@ -1,9 +1,10 @@
 import pytest
 from unittest.mock import patch
 from flask import request
+import io
+
 from app import app
 from service import NotFoundError, DatabaseError, FileHandlingError
-import io
 
 @pytest.fixture
 def client():

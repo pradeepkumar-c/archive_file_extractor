@@ -1,122 +1,200 @@
-# Architecture Overview
+# Architecture - Archive Extractor Service
 
-This document describes the runtime architecture of the Archive Extraction Service. The diagrams below show the system components and a typical job processing sequence.
+---
 
-## Component diagram
+## 1. Overview
+
+This service processes archive extraction jobs asynchronously. It accepts an archive and a file pattern, recursively extracts nested archives, finds matching files, and stores results in a database.
+
+---
+
+## 2. High-Level Architecture
 
 ```mermaid
-flowchart LR
-  Client[Client]
-  API[Flask API]
-  DB[(Postgres DB)]
-  Storage[Archive storage]
-  Dispatcher[Dispatcher]
-  WorkerPool[Worker pool]
-  Extractor[Extractor]
-  Matcher[File matcher]
-
-  Client -->|POST /extractions| API
-  API -->|save file & create job| Storage
-  API -->|insert pending job| DB
-  Dispatcher -->|poll pending jobs| DB
-  Dispatcher -->|schedule job| WorkerPool
-  WorkerPool -->|run| Extractor
-  Extractor --> Matcher
-  Matcher -->|write matches| DB
-  Extractor -->|read/write temp files| Storage
-  WorkerPool -->|update status| DB
+graph TD
+    A[Client] --> B[Flask API]
+    B --> C[Database (JobStorage & FileMatch)]
+    C --> D[Job Dispatcher (Polling Loop)]
+    D --> E[ThreadPoolExecutor]
+    E --> F[process_job Worker]
+    F --> G[Recursive Extraction]
+    G --> H[File Matching]
+    H --> I[Store Results in DB]
+    I --> C
+    C --> B
 ```
 
-## Sequence diagram (typical job)
+### Explanation
+
+1. Client sends request to API
+2. API stores job in database
+3. Dispatcher polls DB for pending jobs
+4. Jobs are executed via ThreadPoolExecutor
+5. Worker processes job
+6. Extract files and match patterns
+7. Store results in DB
+8. Client retrieves results
+
+---
+
+## 3. Components
+
+### Flask API
+- Handles HTTP requests
+- Validates input
+- Inserts jobs into database
+
+### Database
+
+#### JobStorage
+- jobid
+- status
+- submitted_at
+- completed_at
+- error
+
+#### FileMatch
+- jobid
+- filepath
+- filename
+- filesize
+- nesting_depth
+- source_archive
+
+### Job Dispatcher
+- Polls database continuously
+- Picks jobs with status = pending
+- Updates status to running
+
+### ThreadPoolExecutor
+- Executes jobs concurrently
+- Controlled by pool size
+
+### Worker (process_job)
+- Extract archive
+- Recursively process nested archives
+- Store matched files
+- Update job status
+
+---
+
+## 4. Sequence Diagram
 
 ```mermaid
 sequenceDiagram
-  participant C as Client
-  participant API as Flask API
-  participant S as Storage
-  participant DB as Postgres
-  participant D as Dispatcher
-  participant W as Worker
-  participant E as Extractor
-  participant M as Matcher
+    participant Client
+    participant API
+    participant DB
+    participant Dispatcher
+    participant Worker
 
-  C->>API: POST /extractions (archive, pattern)
-  API->>S: save uploaded archive -> archives_<jobid>/file
-  API->>DB: insert JobStorage(status='pending') -> jobid
-  API-->>C: 202 Accepted (job_id)
+    Client->>API: POST /extractions
+    API->>DB: insert job (pending)
+    API-->>Client: 202 job_id
 
-  Note over D,DB: Background dispatcher polls DB for pending jobs
-  D->>DB: query jobs where status='pending'
-  D->>W: schedule process_job(jobid)
-  W->>S: read archive archives_<jobid>/file
-  W->>E: extract archive to temp dir
-  E->>M: find matching files (recursively)
-  M->>DB: insert FileMatch rows for each match
-  W->>DB: update JobStorage(status='completed', completed_at)
+    Dispatcher->>DB: fetch pending jobs
+    Dispatcher->>DB: set running
+    Dispatcher->>Worker: submit job
 
-  C->>API: GET /extractions/{jobid}/results
-  API->>DB: paginate FileMatch where jobid
-  API-->>C: 200 OK (files, total, pages)
+    Worker->>Worker: extract + recurse
+    Worker->>DB: insert matches
+    Worker->>DB: update status completed
+
+    Client->>API: GET /extractions/{job_id}
+    API->>DB: fetch job
+    API-->>Client: return status
 ```
 
-## Notes
+### Sequence Diagram Explanation
 
-- Diagrams are logical; `Storage` may be local disk (`archives_<jobid>`) or an external object store depending on deployment.
-- `Dispatcher` is an in-process background component that schedules `process_job()` on a worker pool.
+#### 1. Client Submits Job
+- Client sends POST /extractions request
+- Includes archive and pattern
 
-## Component explanations
+#### 2. API Stores Job
+- Job inserted into DB with status = pending
 
-- **Client**: Any HTTP client (curl, Postman, or internal service) that uploads archives and requests job status/results.
-- **Flask API**: The HTTP layer (`app.py`, `routes.py`) that accepts requests, validates input, saves uploaded files to storage, and inserts a `JobStorage` record with `pending` status into the database.
-- **Archive storage**: Where uploaded archives are saved (implementation: `archives_<jobid>` on local filesystem). Used by workers to read the archive for extraction. Can be swapped for S3 or other object stores in production.
-- **Postgres DB**: Stores job metadata (`JobStorage`) and matched-file records (`FileMatch`). The dispatcher and workers read/write job state and file matches here.
-- **Dispatcher**: Background component that periodically polls the DB for `pending` jobs and schedules them onto the worker pool. Controls concurrency via `POOL_SIZE`.
-- **Worker pool**: A bounded pool of workers (threads in current implementation) that execute `process_job()` for each job; each worker handles extraction, matching, DB writes, and status updates.
-- **Extractor**: Extraction logic (`extract_archive`, `extract_and_find`) that unpacks archives into temporary directories, detects nested archives, and delegates nested extraction.
-- **Matcher**: File-matching logic that applies glob patterns (via `glob`) to extracted file trees and constructs `FileMatch` metadata for DB insertion.
+#### 3. Response Returned
+- API immediately returns job_id
+- Processing is asynchronous
 
-## Sequence diagram step explanations
+#### 4. Dispatcher Picks Job
+- Dispatcher finds pending job
+- Updates status to running
 
-1. Client → Flask API: POST /extractions (archive, pattern)
-  - The client submits an archive file and a glob `pattern` (e.g., `**/*.json`) as `multipart/form-data`.
+#### 5. Worker Execution
+- Worker starts processing job
+- Extracts archive and nested archives
 
-2. Flask API → Storage: save uploaded archive → archives_<jobid>/file
-  - API saves the uploaded file to a stable location associated with the new job id. This is the source used by workers for extraction.
+#### 6. File Matching
+- Applies pattern matching on extracted files
 
-3. Flask API → Postgres DB: insert JobStorage(status='pending') → jobid
-  - API creates a `JobStorage` record with `status='pending'`, `archivename`, `pattern`, and `submitted_at`. The generated `jobid` is returned to the client.
+#### 7. Store Results
+- Matching files are stored in DB
 
-4. Flask API → Client: 202 Accepted (job_id)
-  - The API returns immediately with `202 Accepted` and the `job_id`, confirming asynchronous processing.
+#### 8. Job Completion
+- Status updated to completed or failed
 
-5. Dispatcher polls DB for pending jobs
-  - A background dispatcher loop queries the DB for jobs with `status='pending'` and selects up to `POOL_SIZE` jobs to schedule.
+#### 9. Client Polls Status
+- Client calls GET endpoint
+- Retrieves job status and results
 
-6. Dispatcher → Worker: schedule process_job(jobid)
-  - Dispatcher updates job status to `running` and submits `process_job(jobid)` to the worker pool.
+---
 
-7. Worker → Storage: read archive archives_<jobid>/file
-  - The worker reads the saved archive file from storage to begin extraction.
+## 5. Extraction Flow
 
-8. Worker → Extractor: extract archive to temp dir
-  - The extractor unpacks the archive into a temporary directory, using `zipfile` or `py7zr`. For nested archives, the extractor recurses with a safety depth limit.
+```mermaid
+graph TD
+    A[Archive] --> B[Extract]
+    B --> C{Nested Archives?}
+    C -->|Yes| D[Extract Nested]
+    D --> C
+    C -->|No| E[Match Files]
+    E --> F[Store Results]
+```
 
-9. Extractor → Matcher: find matching files (recursively)
-  - The matcher scans the extracted tree with the provided glob pattern, skipping nested archives for separate recursive handling, and collects file metadata (path, size, nesting depth).
+---
 
-10. Matcher → Postgres DB: insert FileMatch rows for each match
-   - For each matched file, worker inserts rows into `FileMatch` with the full logical path (including nesting chain), filename, filesize, nesting depth, `extracted_at`, and `source_archive`.
+## 6. Concurrency Design
 
-11. Worker → Postgres DB: update JobStorage(status='completed', completed_at)
-   - After processing, the worker updates the job row to `completed` and writes `completed_at` (or `failed` with `error` on exceptions).
+- ThreadPoolExecutor handles parallel job execution
+- Dispatcher ensures controlled job scheduling
+- Designed for I/O-bound operations
 
-12. Client → Flask API: GET /extractions/{jobid}/results
-   - Client queries the API for paginated matched file results.
+---
 
-13. Flask API → Postgres DB: paginate FileMatch where jobid
-   - The API reads `FileMatch` rows for the `jobid` with the requested `page` and `per_page` parameters and returns paginated results.
+## 7. Job Lifecycle
 
-14. Flask API → Client: 200 OK (files, total, pages)
-   - The API returns a JSON payload with matched file paths and pagination metadata.
+```mermaid
+stateDiagram-v2
+    [*] --> pending
+    pending --> running
+    running --> completed
+    running --> failed
+```
 
-These explanations map each diagram arrow to a concise operational step to aid readers in understanding system behavior and responsibilities.
+---
+
+## 8. Key Design Decisions
+
+- Database-driven job queue
+- Dispatcher loop for controlled execution
+- Recursive archive extraction
+- Thread-based concurrency
+
+---
+
+## 9. Limitations
+
+- Polling-based dispatcher
+- No distributed workers
+- No authentication
+
+---
+
+## 10. Future Improvements
+
+- Replace polling with queue system
+- Add distributed workers
+- Add authentication
+- Improve performance for large archives
